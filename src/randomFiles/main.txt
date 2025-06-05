@@ -1,0 +1,165 @@
+#include <Adafruit_MPU6050.h>
+#include <Adafruit_Sensor.h>
+#include <Wire.h>
+
+#include <Fusion.h>
+
+#include <iostream>
+#include <vector>
+#include <algorithm>
+
+Adafruit_MPU6050 mpu;
+
+FusionAhrs ahrs;
+unsigned long previousTime = 0;
+float previousAccelerationZ = 0;
+float accelBiasX = 0, accelBiasY = 0, accelBiasZ = 0;
+ 
+#define BUTTON_PIN 12
+
+void calibrateAcceleration(){
+    sensors_event_t a, g, temp;
+
+    float totalAx = 0, totalAy = 0, totalAz = 0;
+
+    for (int i = 0; i < 100; i++){
+        mpu.getEvent(&a, &g, &temp);
+        totalAx += a.acceleration.x;
+        totalAy += a.acceleration.y;
+        totalAz += a.acceleration.z;
+        delay(10);
+    }
+    accelBiasX = totalAx / 100;
+    accelBiasY = totalAy / 100;
+    accelBiasZ = totalAz / 100;
+}
+
+void setup(){
+
+    Serial.begin(9600);
+    while (!Serial) delay(10);
+
+    pinMode(BUTTON_PIN, INPUT_PULLUP);
+
+    Wire.begin(21, 22);
+    if (!mpu.begin()) {
+        Serial.println("Failed to find MPU6050 chip");
+        while (1) {
+            Serial.print(".");
+            delay(10);
+        }
+    }
+    Serial.println("MPU found");
+
+    mpu.setAccelerometerRange(MPU6050_RANGE_8_G);
+    mpu.setGyroRange(MPU6050_RANGE_500_DEG);
+    mpu.setFilterBandwidth(MPU6050_BAND_5_HZ);
+
+    FusionAhrsInitialise(&ahrs);
+    delay(2000);
+
+    calibrateAcceleration();
+
+    previousTime = millis() - 100;
+  }
+  
+int repCount = 0;
+float repThreshold = 3.0f;      // Minimum Z acceleration to count a rep
+const unsigned long repCooldown = 1200; // Cooldown time in ms
+unsigned long lastRepTime = 0;
+
+
+float jerkEma = 0.0f;
+float accelEma = 0.0f;
+
+bool calibrating = false;
+float peakDeltaAccelZ = 0.0f;
+unsigned long calibrationStartTime;
+std::vector<float> calibrationSpikes;
+
+void loop() {
+   
+    unsigned long currentTime = millis();
+    float deltaTime = (currentTime - previousTime) / 1000.0f;
+    previousTime = currentTime;
+
+    bool buttonPressed = (digitalRead(BUTTON_PIN) == LOW);
+
+    if (buttonPressed) {
+        calibrateAcceleration();
+        calibrationStartTime = currentTime;
+        calibrating = true;
+    }
+
+    /* Get new sensor events with the readings */
+    sensors_event_t a, g, temp;
+    mpu.getEvent(&a, &g, &temp);
+
+    FusionVector gyro = {g.gyro.x * 180.0f / PI, g.gyro.y * 180.0f / PI, g.gyro.z * 180.0f / PI};
+    FusionVector accel = {a.acceleration.x - accelBiasX, a.acceleration.y - accelBiasY, a.acceleration.z - accelBiasZ}; 
+
+    FusionAhrsUpdateNoMagnetometer(&ahrs, gyro, accel, deltaTime);
+    
+    FusionQuaternion q = FusionAhrsGetQuaternion(&ahrs);
+    FusionMatrix R = FusionQuaternionToMatrix(q);
+    FusionVector accWorld = FusionMatrixMultiplyVector(R, accel);
+
+    float zAcc = accWorld.array[2];
+    float jerk = (zAcc-previousAccelerationZ)/deltaTime; 
+    previousAccelerationZ = zAcc;
+
+    const float alpha = 0.2f; // Tuning parameter
+
+    // In your loop:
+    accelEma = alpha * zAcc + (1.0f - alpha) * accelEma;
+    jerkEma = alpha * jerk + (1.0f - alpha) * jerkEma;
+
+    if (calibrating){
+        
+        if ((jerkEma) < 25.0f){
+            calibrationSpikes.push_back((jerkEma));
+            Serial.print("calibrating: ");
+            Serial.println(jerkEma);
+        }
+        if (currentTime - calibrationStartTime > 5000){
+            
+            std::sort(calibrationSpikes.begin(), calibrationSpikes.end(), std::greater<float>());
+            float top5Avg = 0.0f;
+            Serial.print("calibrating: ");
+            for (int i = 2; i < 7; i++){
+                top5Avg += calibrationSpikes[i];
+                Serial.print(calibrationSpikes[i]);
+                Serial.print(", ");
+            }
+            Serial.println();
+            repThreshold = (top5Avg / 5.0f) * 0.7f;
+        
+  
+            calibrating = false;
+            
+            Serial.print("Calibrating complete. ");
+            Serial.print(". Rep threshold: ");
+            Serial.println(repThreshold);
+
+            calibrationSpikes.clear();
+        }
+    } else {
+        Serial.print("Floating Avg: ");
+        Serial.print(jerkEma); 
+        Serial.print(", Z acc: ");
+        Serial.println(zAcc);
+
+        if ((jerkEma > repThreshold) && (accelEma > 0.3) && (accelEma < 3) && (currentTime - lastRepTime > repCooldown)){
+            float repTime = (currentTime - lastRepTime)/1000.0f;
+            Serial.print("New rep. "); 
+            Serial.print("Rep Duration: ");
+            Serial.print(repTime);
+            Serial.println(" seconds. "); 
+
+            lastRepTime = currentTime;
+        }
+    }
+
+    delay(100);
+}
+

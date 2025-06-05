@@ -1,0 +1,65 @@
+#include <Arduino.h>
+#include "WiFi.h"
+#include "WiFiClient.h"
+#include "WiFiAP.h"
+
+#define LED_BUILTIN 2
+
+const char *ssid = "my special wifi";
+const char *password = "shane060807";
+
+WiFiServer server(80);
+
+void setup() {
+  Serial.begin(9600);
+  pinMode(LED_BUILTIN, OUTPUT);
+
+  WiFi.softAP(ssid, password);
+  IPAddress myIP = WiFi.softAPIP();
+  Serial.print("AP IP address: ");
+  Serial.println(myIP);
+  server.begin();
+
+  Serial.println("Server started");
+}
+
+void loop() {
+  WiFiClient client = server.available();
+  if (!client) return;
+
+  Serial.println("New client");
+  String currentLine = "";
+
+  while (client.connected()) {
+    if (!client.available()) continue;
+  
+    char c = client.read();
+    Serial.write(c);
+    if (c == '\n'){
+      if (currentLine.length() == 0){
+        client.println("HTTP/1.1 200 OK");
+        client.println("Content-type:text/html");
+        client.println();
+
+        client.print("Click <a href=\"/H\">here</a> to turn ON the LED.<br>");
+        client.print("Click <a href=\"/L\">here</a> to turn OFF the LED.<br>");
+        client.println();
+        break;
+      }
+      currentLine = "";
+      } else if (c != '\r') {
+        currentLine += c;
+        if (currentLine.endsWith("GET /H")) {
+          digitalWrite(LED_BUILTIN, HIGH);
+        }
+        if (currentLine.endsWith("GET /L")) {
+          digitalWrite(LED_BUILTIN, LOW);
+        }
+    }
+  }
+  client.stop();
+  Serial.println("Client Disconnected.");
+}
+    
+
+

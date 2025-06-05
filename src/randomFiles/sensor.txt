@@ -1,0 +1,32 @@
+#include <Arduino.h>
+
+#define echo_pin 18
+#define trig_pin 5
+
+void setup(){
+    Serial.begin(9600);
+    pinMode(trig_pin, OUTPUT);
+    pinMode(echo_pin, INPUT);
+}
+void loop(){
+    // clearing trigger
+    digitalWrite(trig_pin, LOW);
+    delayMicroseconds(2);
+
+
+    //sending trigger
+    digitalWrite(trig_pin, HIGH);
+    delayMicroseconds(10);
+    digitalWrite(trig_pin, LOW);
+
+    // in microseconds
+    long duration = pulseIn(echo_pin, HIGH);
+
+    // to cm
+    float distance = duration * 0.034 / 2;
+
+    float distanceInches = distance * 0.393701;
+    Serial.print("Distance(inches): ");
+    Serial.println(distanceInches);
+    delay(250);
+}
